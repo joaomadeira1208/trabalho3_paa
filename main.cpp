@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <unordered_set>
+#include <random>
+#include <ctime>
+#include <sstream>
+#include <functional>
+#include <sys/resource.h>
+#include <fstream>
 
 using namespace std;
 
@@ -73,6 +79,7 @@ void zhang_calcularDistanciaSubarvore(
     }
 }
 
+// Algoritmo de Zhang & Shasha
 int zhang_calcularTED(Tree &arvore1, Tree &arvore2)
 {
     vector<int> lld1, lld2;
@@ -100,47 +107,233 @@ int zhang_calcularTED(Tree &arvore1, Tree &arvore2)
     return distanciaArvore[tam1 - 1][tam2 - 1];
 }
 
-void exemplo(Tree &a1, Tree &a2)
+int compararArvoresGuloso(TreeNode *n1, TreeNode *n2)
 {
-    a1.setRoot(4, "d");
-    a1.addEdge(4, "d", 2, "b");
-    a1.addEdge(4, "d", 6, "f");
-    a1.addEdge(2, "b", 1, "a");
-    a1.addEdge(2, "b", 3, "c");
-    a1.addEdge(6, "f", 5, "e");
-    a1.addEdge(6, "f", 7, "g");
+    if (!n1 && !n2)
+        return 0;
 
-    a2.setRoot(6, "f");
-    a2.addEdge(6, "f", 5, "e");
-    a2.addEdge(6, "f", 7, "g");
-    a2.addEdge(5, "e", 99, "x");
+    if (!n1 && n2)
+    {
+        int custo = 3;
+        for (auto *filho : n2->children)
+            custo += compararArvoresGuloso(nullptr, filho);
+        return custo;
+    }
+
+    if (n1 && !n2)
+    {
+        int custo = 3;
+        for (auto *filho : n1->children)
+            custo += compararArvoresGuloso(filho, nullptr);
+        return custo;
+    }
+
+    int custo = (n1->label != n2->label) ? 2 : 0;
+
+    int tam1 = n1->children.size();
+    int tam2 = n2->children.size();
+    int comum = min(tam1, tam2);
+
+    for (int i = 0; i < comum; ++i)
+        custo += compararArvoresGuloso(n1->children[i], n2->children[i]);
+
+    for (int i = comum; i < tam1; ++i)
+        custo += compararArvoresGuloso(n1->children[i], nullptr);
+
+    for (int i = comum; i < tam2; ++i)
+        custo += compararArvoresGuloso(nullptr, n2->children[i]);
+
+    return custo;
 }
+// Algoritmo guloso
+int tedGuloso(Tree &a1, Tree &a2)
+{
+    return compararArvoresGuloso(a1.getRoot(), a2.getRoot());
+}
+
+void gerarArvoreAleatoriaComString(Tree &t, int maxNos, const std::string &prefixo)
+{
+    if (maxNos <= 0)
+        return;
+
+    static std::mt19937 rng(time(nullptr));
+    std::uniform_int_distribution<int> filhosDistrib(0, 3);
+    std::uniform_int_distribution<int> letraDistrib('a', 'z');
+
+    int id = 0;
+    int limite = maxNos;
+    std::ostringstream oss;
+
+    std::function<void(int)> gerarSubarvore;
+
+    gerarSubarvore = [&](int profundidade)
+    {
+        if (id >= limite)
+            return;
+
+        char letra = static_cast<char>(letraDistrib(rng));
+        oss << letra;
+
+        int filhos = filhosDistrib(rng);
+        if (filhos > 0 && id + filhos < limite)
+        {
+            oss << "(";
+            for (int i = 0; i < filhos; ++i)
+            {
+                if (i > 0)
+                    oss << " ";
+                ++id;
+                gerarSubarvore(profundidade + 1);
+            }
+            oss << ")";
+        }
+    };
+
+    ++id;
+    gerarSubarvore(0);
+
+    std::string treeStr = oss.str();
+    t.buildFromString(treeStr);
+}
+
+int getMemoryUsageInBytes()
+{
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    return usage.ru_maxrss * 1024;
+}
+
+void executarExperimentosComArvoresAleatorias()
+{
+    using namespace std::chrono;
+
+    std::ofstream csv("resultados.csv");
+    csv << "Iteracao,TED_Guloso,TED_Zhang,Tempo_Guloso(us),Tempo_Zhang(us),"
+        << "Mem_Estimada_Guloso(MB),Mem_Real_Guloso(MB),"
+        << "Mem_Estimada_Zhang(MB),Mem_Real_Zhang(MB),TED_Diferente\n";
+
+    for (int iter = 1; iter <= 10000; ++iter)
+    {
+        Tree a1, a2;
+        gerarArvoreAleatoriaComString(a1, 32, "a");
+        gerarArvoreAleatoriaComString(a2, 32, "b");
+
+        cout << "==================== Iteração " << iter << " ====================" << endl;
+
+        int mem_before_guloso = getMemoryUsageInBytes();
+        auto inicio_1 = high_resolution_clock::now();
+        int custo_guloso = tedGuloso(a1, a2);
+        auto fim_1 = high_resolution_clock::now();
+        int mem_after_guloso = getMemoryUsageInBytes();
+        auto duracao_1 = duration_cast<microseconds>(fim_1 - inicio_1).count();
+
+        vector<TreeNode *> ordem1, ordem2;
+        vector<int> lld1, lld2;
+        a1.postOrder(a1.getRoot(), ordem1, lld1);
+        a2.postOrder(a2.getRoot(), ordem2, lld2);
+
+        int memBytesGuloso = sizeof(TreeNode *) * ordem1.size() + sizeof(TreeNode *) * ordem2.size();
+        double memMBGulosoEstimada = memBytesGuloso / (1024.0 * 1024.0);
+        double memMBGulosoReal = (mem_after_guloso - mem_before_guloso) / (1024.0 * 1024.0);
+
+        cout << "[GULOSO]" << endl;
+        cout << "TED: " << custo_guloso << endl;
+        cout << "Tempo de execução: " << duracao_1 << " μs" << endl;
+        cout << "Uso estimado de memória (apenas vetores): " << memMBGulosoEstimada << " MB" << endl;
+        cout << "Uso real de memória: " << memMBGulosoReal << " MB" << endl;
+
+        vector<int> raizesChave1 = obterRaizesChave(lld1);
+        vector<int> raizesChave2 = obterRaizesChave(lld2);
+        long long memoriaDP = 0;
+        for (int i : raizesChave1)
+        {
+            for (int j : raizesChave2)
+            {
+                int i1 = lld1[i];
+                int j1 = lld2[j];
+                int m = i - i1 + 1;
+                int n = j - j1 + 1;
+                memoriaDP += static_cast<long long>(m + 1) * (n + 1) * sizeof(int);
+            }
+        }
+
+        int mem_before_zhang = getMemoryUsageInBytes();
+        auto inicio_2 = high_resolution_clock::now();
+        int custo_zhang = zhang_calcularTED(a1, a2);
+        auto fim_2 = high_resolution_clock::now();
+        int mem_after_zhang = getMemoryUsageInBytes();
+        auto duracao_2 = duration_cast<microseconds>(fim_2 - inicio_2).count();
+
+        double memMBZhangEstimada = memoriaDP / (1024.0 * 1024.0);
+        double memMBZhangReal = (mem_after_zhang - mem_before_zhang) / (1024.0 * 1024.0);
+
+        cout << "[ZHANG & SHASHA]" << endl;
+        cout << "TED: " << custo_zhang << endl;
+        cout << "Tempo de execução: " << duracao_2 << " μs" << endl;
+        cout << "Uso estimado de memória (somando DPs internas): " << memMBZhangEstimada << " MB" << endl;
+        cout << "Uso real de memória: " << memMBZhangReal << " MB" << endl;
+
+        bool diferentes = (custo_guloso != custo_zhang);
+
+        csv << iter << ","
+            << custo_guloso << ","
+            << custo_zhang << ","
+            << duracao_1 << ","
+            << duracao_2 << ","
+            << memMBGulosoEstimada << ","
+            << memMBGulosoReal << ","
+            << memMBZhangEstimada << ","
+            << memMBZhangReal << ","
+            << (diferentes ? 1 : 0) << "\n";
+
+        cout << "===================================================" << endl;
+    }
+
+    csv.close();
+}
+
+/*
+ * Para testar com árvores aleatórias, utilize a função:
+ *     executarExperimentosComArvoresAleatorias();
+ *
+ * Ela gera árvores aleatórias, roda os algoritmos,
+ * mede tempo de execução, uso estimado e real de memória,
+ * e salva os resultados em um arquivo CSV.
+ *
+ * Pode mudar o tamanho máximo da árvore: (gerarArvoreAleatoriaComString(a2, 32, "b");) -> neste caso 32
+ * Pode mudar o número de iterações: (for (int iter = 1; iter <= 10000; ++iter)) -> neste caso 10.0000
+ * Intrução: apenas chamar a função dentro da main()
+ */
 
 int main()
 {
-    Tree a1, a2;
-    a1.buildFromString("d(b(a c) f(e g))");
-    a2.buildFromString("f(e(x) g)");
-
     using namespace std::chrono;
 
-    auto inicio = high_resolution_clock::now();
+    Tree T1, T2;
+    T1.buildFromString("d(b(a c) f(e g))");
+    T2.buildFromString("f(e(x) g)");
 
-    int result = zhang_calcularTED(a1, a2);
+    auto inicio_guloso = high_resolution_clock::now();
+    int tedG = tedGuloso(T1, T2);
+    auto fim_guloso = high_resolution_clock::now();
+    auto duracao_guloso = duration_cast<microseconds>(fim_guloso - inicio_guloso).count();
 
-    auto fim = high_resolution_clock::now();
-    auto duracao = duration_cast<microseconds>(fim - inicio).count();
+    auto inicio_zhang = high_resolution_clock::now();
+    int tedZ = zhang_calcularTED(T1, T2);
+    auto fim_zhang = high_resolution_clock::now();
+    auto duracao_zhang = duration_cast<microseconds>(fim_zhang - inicio_zhang).count();
 
-    vector<TreeNode *> ordem1, ordem2;
-    vector<int> lld1, lld2;
-    a1.postOrder(a1.getRoot(), ordem1, lld1);
-    a2.postOrder(a2.getRoot(), ordem2, lld2);
-    size_t memBytes = sizeof(int) * ordem1.size() * ordem2.size();
-    double memMB = memBytes / (1024.0 * 1024.0);
+    cout << "[GULOSO]" << endl;
+    cout << "TED: " << tedG << endl;
+    cout << "Tempo: " << duracao_guloso << " μs" << endl;
 
-    cout << "TED: " << result << endl;
-    cout << "Tempo de execução: " << duracao << " μs" << endl;
-    cout << "Uso estimado de memória (matriz DP): " << memMB << " MB" << endl;
+    cout << "[ZHANG & SHASHA]" << endl;
+    cout << "TED: " << tedZ << endl;
+    cout << "Tempo: " << duracao_zhang << " μs" << endl;
+
+    cout << "=====================================================================" << endl;
+
+    // executarExperimentosComArvoresAleatorias();
 
     return 0;
 }
